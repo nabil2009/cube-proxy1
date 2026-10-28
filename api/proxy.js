@@ -1,90 +1,72 @@
 export default async function handler(req, res) {
-  const targetBase = "https://cube.xbluestudio2009.workers.dev";
-  const url = targetBase + req.url;
+  const ORIGIN = "https://cube.freesrv.com";
+  const targetUrl = ORIGIN + req.url;
 
+  // Copy headers
   const headers = {};
-  for (const [k, v] of Object.entries(req.headers)) {
-    const key = k.toLowerCase();
-    if (["host", "connection", "content-length", "accept-encoding"].includes(key)) continue;
+  for (const [k,v] of Object.entries(req.headers)) {
+    const lk = k.toLowerCase();
+    if (["host","connection","content-length","accept-encoding"].includes(lk)) continue;
     headers[k] = v;
   }
   headers["host"] = "cube.freesrv.com";
   headers["x-forwarded-host"] = "cubegarde.sytes.net";
   headers["x-forwarded-proto"] = "https";
-  headers["x-real-ip"] = req.headers["x-forwarded-for"] || req.socket?.remoteAddress || "";
   if (req.headers.cookie) headers["cookie"] = req.headers.cookie;
 
-  let body = undefined;
+  let body;
   if (req.method !== "GET" && req.method !== "HEAD") {
     const chunks = [];
-    for await (const chunk of req) chunks.push(chunk);
+    for await (const ch of req) chunks.push(ch);
     body = Buffer.concat(chunks);
     if (body.length === 0) body = undefined;
   }
 
   try {
-    const r = await fetch(url, {
+    const r = await fetch(targetUrl, {
       method: req.method,
       headers,
       body,
       redirect: "manual",
     });
 
-    // نسخ الستاتوس
     res.statusCode = r.status;
 
-    // نسخ الهيدرز - مهم جدا للكوكيز
-    for (const [k, v] of r.headers.entries()) {
+    // Copy headers except set-cookie
+    for (const [k,v] of r.headers.entries()) {
       if (k.toLowerCase() === "set-cookie") continue;
       if (k.toLowerCase() === "content-encoding") continue;
       if (k.toLowerCase() === "content-length") continue;
       res.setHeader(k, v);
     }
 
-    // نسخ Set-Cookie بشكل صحيح
+    // Forward cookies correctly
     let cookies = [];
-    if (r.headers.getSetCookie) {
-      cookies = r.headers.getSetCookie();
-    } else {
+    if (r.headers.getSetCookie) cookies = r.headers.getSetCookie();
+    else {
       const sc = r.headers.get("set-cookie");
-      if (sc) cookies = [sc];
+      if (sc) cookies = sc.split(",").length > 1 ? [sc] : [sc];
     }
-
     if (cookies.length > 0) {
-      const fixed = cookies.map(c => 
-        c.replace(/Domain=[^;]+;?/gi, "").replace(/;\s*;/g, ";").trim()
-      );
+      const fixed = cookies.map(c => c.replace(/Domain=[^;]+;?/gi, "").replace(/;;/g, ";").trim());
       res.setHeader("Set-Cookie", fixed);
-      console.log("Forwarded cookies:", fixed);
     }
 
-    // معالجة الريدايركت
     const loc = r.headers.get("location");
-    if (loc && r.status >= 300 && r.status < 400) {
+    if (loc) {
       let newLoc = loc;
       if (newLoc.includes("cube.freesrv.com")) {
-        newLoc = newLoc.replace(/https?:\/\/cube\.freesrv\.com(?::9069)?/g, "https://cubegarde.sytes.net");
-      }
-      if (newLoc.includes("cube.xbluestudio2009.workers.dev")) {
-        newLoc = newLoc.replace(/https?:\/\/cube\.xbluestudio2009\.workers\.dev/g, "https://cubegarde.sytes.net");
+        newLoc = newLoc.replace(/https?:\/\/cube\.freesrv\.com/g, "https://cubegarde.sytes.net");
       }
       res.setHeader("Location", newLoc);
     }
 
-    if (r.body) {
-      const buf = Buffer.from(await r.arrayBuffer());
-      res.send(buf);
-    } else {
-      res.end();
-    }
+    const buf = Buffer.from(await r.arrayBuffer());
+    res.send(buf);
   } catch (e) {
-    console.error("proxy error", e);
+    console.error(e);
     res.status(500).send("Proxy error: " + e.message);
   }
 }
 
-export const config = {
-  api: {
-    bodyParser: false,
-  },
-};
+export const config = { api: { bodyParser: false } };
